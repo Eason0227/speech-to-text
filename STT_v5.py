@@ -14,7 +14,7 @@ st.info("幫助寫作業 の 工具 By Eason")
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # Max file size in MB (Groq limit is 25MB)
-MAX_FILE_SIZE_MB = 10
+MAX_FILE_SIZE_MB = 15
 # Max chunk duration in milliseconds (15 minutes)
 CHUNK_DURATION_MS = 15 * 60 * 1000
 # Max retries for rate limit
@@ -167,3 +167,4 @@ if uploaded_file is not None:
                         chunk_path = chunk_path[0]
                     if os.path.exists(chunk_path):
                         os.unlink(chunk_path)
+
