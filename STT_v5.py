@@ -4,6 +4,8 @@ import tempfile
 import os
 from pydub import AudioSegment
 import math
+import time
+import re
 
 st.title("🎙️ 語音轉文字 (Speech to Text)")
 
@@ -15,6 +17,48 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 MAX_FILE_SIZE_MB = 10
 # Max chunk duration in milliseconds (15 minutes)
 CHUNK_DURATION_MS = 15 * 60 * 1000
+# Max retries for rate limit
+MAX_RETRIES = 5
+
+def transcribe_with_retry(audio_file_path, status_placeholder=None):
+    """Transcribe audio with automatic retry on rate limit errors."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            with open(audio_file_path, "rb") as audio_file:
+                transcription = client.audio.transcriptions.create(
+                    file=audio_file,
+                    model="whisper-large-v3",
+                    temperature=0,
+                    response_format="verbose_json",
+                )
+            return transcription
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "rate_limit" in error_msg.lower():
+                # Extract wait time from error message
+                wait_match = re.search(r'try again in (\d+)m?([\d.]+)?s?', error_msg, re.IGNORECASE)
+                if wait_match:
+                    minutes = int(wait_match.group(1)) if wait_match.group(1) and 'm' in error_msg else 0
+                    seconds = float(wait_match.group(2)) if wait_match.group(2) else float(wait_match.group(1))
+                    if 'm' in error_msg[wait_match.start():wait_match.end()]:
+                        wait_time = minutes * 60 + seconds
+                    else:
+                        wait_time = seconds
+                else:
+                    wait_time = 60 * (attempt + 1)  # Default backoff
+                
+                wait_time = min(wait_time + 5, 300)  # Add buffer, max 5 min
+                
+                if status_placeholder:
+                    status_placeholder.warning(f"⏳ 達到 API 速率限制，等待 {wait_time:.0f} 秒後重試（第 {attempt + 1}/{MAX_RETRIES} 次）...")
+                
+                time.sleep(wait_time)
+            else:
+                raise e
+    
+    raise Exception("已達最大重試次數，請稍後再試")
+
+# ...existing code...
 
 uploaded_file = st.file_uploader("上傳音檔", type=["m4a", "mp3", "wav", "webm", "ogg", "flac"])
 
@@ -23,6 +67,7 @@ if uploaded_file is not None:
     st.success(f"✅ 已上傳：{uploaded_file.name} ({file_size_mb:.2f} MB)")
     
     if st.button("開始轉換"):
+        status_placeholder = st.empty()
         with st.spinner("轉換中，請稍候..."):
             tmp_file_path = None
             chunk_paths = []
@@ -63,13 +108,7 @@ if uploaded_file is not None:
                     
                     for idx, (chunk_path, time_offset_ms) in enumerate(chunks):
                         st.write(f"處理第 {idx + 1}/{num_chunks} 段...")
-                        with open(chunk_path, "rb") as audio_file:
-                            transcription = client.audio.transcriptions.create(
-                                file=audio_file,
-                                model="whisper-large-v3",
-                                temperature=0,
-                                response_format="verbose_json",
-                            )
+                        transcription = transcribe_with_retry(chunk_path, status_placeholder)
                         
                         if hasattr(transcription, 'text'):
                             all_text.append(transcription.text)
@@ -100,13 +139,7 @@ if uploaded_file is not None:
                 
                 else:
                     # Process normally for small files
-                    with open(tmp_file_path, "rb") as audio_file:
-                        transcription = client.audio.transcriptions.create(
-                            file=audio_file,
-                            model="whisper-large-v3",
-                            temperature=0,
-                            response_format="verbose_json",
-                        )
+                    transcription = transcribe_with_retry(tmp_file_path, status_placeholder)
                     
                     st.success("轉換完成！")
                     
